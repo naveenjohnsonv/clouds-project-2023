@@ -68,10 +68,11 @@ You will mainly work in the `clouds-project-2023/backend-distributed-system/back
 ### Setup
 
 #### Prerequisites
-+ **For Windows, MacOS(Intel chip) and MacOS(M1 & M2) user**, you have to download [Docker Desktop](https://www.docker.com/products/docker-desktop/) for your machine and run it. It allows to create docker images and run them in containers.
++ **For MacOS(Intel chip) and MacOS(M1 & M2) user**, you have to download [Docker Desktop](https://www.docker.com/products/docker-desktop/) for your machine and run it. It allows to create docker images and run them in containers.
 
 + **For Linux users**, you have to install (if you don't have it already) [Docker engine](https://docs.docker.com/engine/install/ubuntu/).
 
++ **For Windows users*, we strongly recommend to download a Linux virtual machine (see [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
 
 ##### Note: Docker Desktop (or Docker engine) must be active in order to use containers
 
