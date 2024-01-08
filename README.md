@@ -790,6 +790,13 @@ docker compose up
 
 **Browser:** connect to http://localhost:3000/
 
+**To shut-down the frontend server:**
+1. Click ctrl-C on **Terminal 7**
+2. Type:
+```
+docker compose down
+```
+3. You can now delete the frontend server container from Docker desktop
 
 
 
