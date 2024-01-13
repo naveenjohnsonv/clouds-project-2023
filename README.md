@@ -116,7 +116,7 @@ If everything is correct so far, by typing `ls -l`, you should see the `backend`
 
 Once in the container, go in the `backend` directory and run the script `./install.sh`.
 
-Then, go in `~/backend/build` and compile the executables using the makefile command `make -j 8`. It will require some time.
+Then, go in `~/backend/build` and compile the executables using the makefile command `make -j$(nproc)`. It will require some time.
 
 Finally, compile and run the tests by typing `make check`. It requires some time.
 
@@ -127,7 +127,7 @@ The previous command are summarized as follows:
 cd ~/backend
 ./install.sh
 cd build 
-make -j
+make -j$(nproc)
 make check
 ```
 
@@ -141,7 +141,7 @@ solution it is necessary to log in the container and use the command line interf
 
 ### Compiling
 Once you modified a C++ class, you can compile it by running:
-* `make -j 8` in the `build` directory
+* `make -j$(nproc)` in the `build` directory
 <br>or
 * `make class-name` in the `build` directory, where `class-name` is the class you want to compile. For example, 
 `shardmaster`, `shardmanager`, `shardkv`, etc.
