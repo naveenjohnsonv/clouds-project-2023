@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <unordered_map>
 
 /* ========================= */
 /* ====== Definitions ====== */
@@ -55,7 +56,8 @@ void sortAscendingInterval(std::vector<shard_t>& shards);
 // sorts a vector of shards into ascending/descending order of shard length
 void sortAscendingSize(std::vector<shard_t>& shards);
 void sortDescendingSize(std::vector<shard_t>& shards);
-
+void RebalanceShards(std::unordered_map<std::string, std::vector<shard_t>>& serverShardMap,
+                     const std::vector<std::string>& servers);
 // gets the size of a shard
 size_t size(const shard_t& s);
 // gets the total size of a vector of shards

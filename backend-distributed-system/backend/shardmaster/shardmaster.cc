@@ -19,7 +19,15 @@
 ::grpc::Status StaticShardmaster::Join(::grpc::ServerContext* context,
                                        const ::JoinRequest* request,
                                        Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    if(serverShardMap.find(request->server()) != serverShardMap.end()) {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server already exists");
+    }
+    servers.push_back(request->server());
+    std::vector<shard_t> newShardVector;
+    serverShardMap[request->server()] = newShardVector;
+    RebalanceShards(serverShardMap, servers);
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -41,7 +49,17 @@
 ::grpc::Status StaticShardmaster::Leave(::grpc::ServerContext* context,
                                         const ::LeaveRequest* request,
                                         Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    for(int i = 0; i < request->servers_size(); i++) {
+        auto it = std::find(servers.begin(), servers.end(), request->servers(i));
+        if(it == servers.end()) {
+            return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server doesn't exist!");
+        }
+        serverShardMap.erase(request->servers(i));
+        servers.erase(it);
+    }
+    RebalanceShards(serverShardMap, servers);
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -62,9 +80,33 @@
 ::grpc::Status StaticShardmaster::Move(::grpc::ServerContext* context,
                                        const ::MoveRequest* request,
                                        Empty* response) {
-  // Hint: Take a look at get_overlap in common.{h, cc}
-  // Using the function will save you lots of time and effort!
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    auto serverIt = serverShardMap.find(request->server());
+    if(serverIt == serverShardMap.end()) {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server doesn't exist. Move Error!");
+    }
+    shard_t shardToMove = {request->shard().lower(), request->shard().upper()};
+    for(auto& serverShards : serverShardMap) {
+        std::vector<shard_t>& shards = serverShards.second;
+        std::vector<shard_t> newShardVector;
+        for(const auto& shard : shards) {
+            auto overlapStatus = get_overlap(shard, shardToMove);
+            if(overlapStatus == OverlapStatus::OVERLAP_START) {
+                newShardVector.push_back({shardToMove.upper + 1, shard.upper});
+            } else if(overlapStatus == OverlapStatus::OVERLAP_END) {
+                newShardVector.push_back({shard.lower, shardToMove.lower - 1});
+            } else if(overlapStatus == OverlapStatus::COMPLETELY_CONTAINS) {
+                newShardVector.push_back({shard.lower, shardToMove.lower - 1});
+                newShardVector.push_back({shardToMove.upper + 1, shard.upper});
+            } else if (overlapStatus == OverlapStatus::NO_OVERLAP) {
+                newShardVector.push_back(shard);
+            }
+        }
+        shards = std::move(newShardVector);
+    }
+    serverShardMap[request->server()].push_back(shardToMove);
+    sortAscendingInterval(serverShardMap[request->server()]);
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -84,5 +126,15 @@
 ::grpc::Status StaticShardmaster::Query(::grpc::ServerContext* context,
                                         const StaticShardmaster::Empty* request,
                                         ::QueryResponse* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    for(const auto& server : servers) {
+        auto configEntry = response->add_config();
+        configEntry->set_server(server);
+        for(const auto& shard : serverShardMap[server]) {
+            auto shardEntry = configEntry->add_shards();
+            shardEntry->set_lower(shard.lower);
+            shardEntry->set_upper(shard.upper);
+        }
+    }
+    return ::grpc::Status::OK;
 }

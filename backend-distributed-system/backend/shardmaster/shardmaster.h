@@ -25,10 +25,9 @@ class StaticShardmaster : public Shardmaster::Service {
                        ::QueryResponse* response) override;
 
  private:
-  // TODO add any fields you want here!
-  // Hint: think about what sort of data structures make sense for keeping track
-  // of which servers have which shards, as well as what kind of locking you
-  // will need to ensure thread safety.
+  std::mutex serverMutex;
+  std::unordered_map<std::string, std::vector<shard_t>> serverShardMap;
+  std::vector<std::string> servers;
 };
 
 #endif  // SHARDING_SHARDMASTER_H
