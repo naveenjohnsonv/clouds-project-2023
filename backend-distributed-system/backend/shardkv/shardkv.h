@@ -24,7 +24,7 @@ class ShardkvServer : public Shardkv::Service {
             [this]() {
                 // TODO: Assignment 2 Implement the QueryShardmaster(...) function
                 std::chrono::milliseconds timespan(100);
-                while (shardmaster_address.empty()) {
+                while (shardmaster_address.empty() && (this->primaryServerAddress != this->address)) {
                     std::this_thread::sleep_for(timespan);
                 }
                 auto stub = Shardmaster::NewStub(
@@ -56,7 +56,6 @@ class ShardkvServer : public Shardkv::Service {
     heartbeat.detach();
   };
 
-
   // TODO implement these three methods, should be fairly similar to your simple_shardkv
   ::grpc::Status Get(::grpc::ServerContext* context,
                      const ::GetRequest* request,
@@ -82,6 +81,9 @@ class ShardkvServer : public Shardkv::Service {
   // ping the shardmanager to get updates about the sharmaster (part 2) and the views changes (part 3)
   void PingShardmanager(Shardkv::Stub* stub);
 
+  // Maximum number of server contact attempts
+  int32_t MAX_SERVER_ATTEMPTS = 1000;
+
  private:
   // address we're running on (hostname:port)
   const std::string address;
@@ -89,8 +91,20 @@ class ShardkvServer : public Shardkv::Service {
   std::string shardmanager_address;
   // address of shardmaster sent by the shardmanager
   std::string shardmaster_address;
-
-  // TODO add any fields you want here!
+  // Database of key-value pairs
+  std::map<std::string, std::string> keyValueDatabase;
+  // Map of keys and their corresponding servers
+  std::map<int, std::string> keyServerMap;
+  // Map of posts and their corresponding users
+  std::map<std::string, std::string> postUserMap;
+  // Mutex for thread safety
+  std::mutex serverMutex;
+  // Current view number to acknowledge
+  int64_t currentAcknowledgedViewNumber;
+  // Address of the backup server
+  std::string backupServerAddress;
+  // Address of the primary server
+  std::string primaryServerAddress;
 };
 
 #endif  // SHARDING_SHARDKV_H

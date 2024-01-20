@@ -18,7 +18,12 @@
 ::grpc::Status ShardkvManager::Get(::grpc::ServerContext* context,
                                   const ::GetRequest* request,
                                   ::GetResponse* response) {
-  return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    auto serverChannel = ::grpc::CreateChannel(primaryServerAddress, ::grpc::InsecureChannelCredentials());
+    Shardkv::Stub shardkvStub(serverChannel);
+    ::grpc::ClientContext cc;
+    auto status = shardkvStub.Get(&cc, *request, response);
+    return status.ok() ? ::grpc::Status::OK : ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Operation failed");
 }
 
 /**
@@ -38,7 +43,12 @@
 ::grpc::Status ShardkvManager::Put(::grpc::ServerContext* context,
                                   const ::PutRequest* request,
                                   Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    auto serverChannel = ::grpc::CreateChannel(primaryServerAddress, ::grpc::InsecureChannelCredentials());
+    Shardkv::Stub shardkvStub(serverChannel);
+    ::grpc::ClientContext cc;
+    auto status = shardkvStub.Put(&cc, *request, response);
+    return status.ok() ? ::grpc::Status::OK : ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Operation failed");
 }
 
 /**
@@ -57,7 +67,12 @@
 ::grpc::Status ShardkvManager::Append(::grpc::ServerContext* context,
                                      const ::AppendRequest* request,
                                      Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    auto serverChannel = ::grpc::CreateChannel(primaryServerAddress, ::grpc::InsecureChannelCredentials());
+    Shardkv::Stub shardkvStub(serverChannel);
+    ::grpc::ClientContext cc;
+    auto status = shardkvStub.Append(&cc, *request, response);
+    return status.ok() ? ::grpc::Status::OK : ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Operation failed");
 }
 
 /**
@@ -75,7 +90,12 @@
 ::grpc::Status ShardkvManager::Delete(::grpc::ServerContext* context,
                                            const ::DeleteRequest* request,
                                            Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::lock_guard<std::mutex> lock(serverMutex);
+    auto serverChannel = ::grpc::CreateChannel(primaryServerAddress, ::grpc::InsecureChannelCredentials());
+    Shardkv::Stub shardkvStub(serverChannel);
+    ::grpc::ClientContext cc;
+    auto status = shardkvStub.Delete(&cc, *request, response);
+    return status.ok() ? ::grpc::Status::OK : ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Operation failed");
 }
 
 /**
@@ -91,7 +111,39 @@
  * here>")
  */
 ::grpc::Status ShardkvManager::Ping(::grpc::ServerContext* context, const PingRequest* request,
-                                       ::PingResponse* response){
-    return ::grpc::Status(::grpc::StatusCode::OK, "Success");
+                                       ::PingResponse* response) {
+    std::lock_guard<std::mutex> lock(serverMutex);
+    std::string serverAddress = request->server();
+    std::vector<std::string> currentViewServers;
+    if(primaryServerAddress.empty() || primaryServerAddress == serverAddress) {
+        primaryServerAddress = (primaryServerAddress.empty()) ? serverAddress : primaryServerAddress;
+        lastAcknowledgedViewNumber = (primaryServerAddress == serverAddress) ? request->viewnumber() : currentViewNumber;
+        currentViewNumber = (primaryServerAddress == serverAddress) ? currentViewNumber : currentViewNumber + 1;
+        currentViewServers.push_back(primaryServerAddress);
+        currentViewServers.push_back(backupServerAddress.empty() ? "" : backupServerAddress);
+        views[currentViewNumber] = currentViewServers;
+        response->set_id(currentViewNumber);
+        response->set_primary(primaryServerAddress);
+        response->set_backup(backupServerAddress.empty() ? "" : backupServerAddress);
+    } else if (backupServerAddress.empty() && serverAddress != primaryServerAddress) {
+        backupServerAddress = serverAddress;
+        currentViewNumber++;
+        currentViewServers.push_back(primaryServerAddress);
+        currentViewServers.push_back(backupServerAddress);
+        views[currentViewNumber] = currentViewServers;
+        response->set_id(lastAcknowledgedViewNumber);
+        response->set_primary(primaryServerAddress);
+        response->set_backup(backupServerAddress);
+    } else if (backupServerAddress == serverAddress) {
+        std::string primary = views[lastAcknowledgedViewNumber].at(0);
+        std::string backup = views[lastAcknowledgedViewNumber].at(1);
+        response->set_primary(primary);
+        response->set_backup(backup);
+        response->set_id(lastAcknowledgedViewNumber);
+    } else {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Exceeded server capacity");
+    }
+    pingIntervals[serverAddress].Push(std::chrono::high_resolution_clock::now());
+    response->set_shardmaster(sm_address);
+    return ::grpc::Status::OK;
 }
-

@@ -37,6 +37,16 @@ class ShardkvManager : public Shardkv::Service {
                   std::chrono::milliseconds timespan(1000);
                   while (true) {
                       std::this_thread::sleep_for(timespan);
+                      if (!primaryServerAddress.empty()) {
+                          auto pi = pingIntervals.find(primaryServerAddress);
+                          if (pi != pingIntervals.end() && pi->second.GetPingInterval() > deadPingInterval) {
+                              std::lock_guard<std::mutex> lock(serverMutex);
+                              primaryServerAddress = backupServerAddress;
+                              backupServerAddress.clear();
+                              currentViewNumber = lastAcknowledgedViewNumber + 1;
+                              views[currentViewNumber] = {primaryServerAddress, backupServerAddress};
+                          }
+                      }
                   }
               });
       // We detach the thread so we don't have to wait for it to terminate later
@@ -65,6 +75,28 @@ class ShardkvManager : public Shardkv::Service {
     // shardmaster address
     std::string sm_address;
 
-    // TODO add any fields you want here!
+    // Mutex for server synchronization
+    std::mutex serverMutex;
+
+    // Address of the primary server
+    std::string primaryServerAddress;
+
+    // Address of the backup server
+    std::string backupServerAddress;
+
+    // Current view number
+    int64_t currentViewNumber = 0;
+
+    // Last acknowledged view number
+    int64_t lastAcknowledgedViewNumber = 0;
+
+    // Ping intervals for each server
+    std::map<std::string, PingInterval> pingIntervals;
+
+    // Map of views with their corresponding servers
+    std::map<int, std::vector<std::string>> views;
+
+    // Time interval to consider a server as dead
+    uint64_t deadPingInterval = 2000;
 };
 #endif  // SHARDING_SHARDKV_MANAGER_H

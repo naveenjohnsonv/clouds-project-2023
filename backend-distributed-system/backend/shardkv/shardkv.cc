@@ -18,7 +18,13 @@
 ::grpc::Status ShardkvServer::Get(::grpc::ServerContext* context,
                                   const ::GetRequest* request,
                                   ::GetResponse* response) {
-  return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    auto requestedKey = request->key();
+    auto it = keyValueDatabase.find(requestedKey);
+    if(it == keyValueDatabase.end()) {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Specified key not found in the database");
+    }
+    response->set_data(it->second);
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -38,7 +44,56 @@
 ::grpc::Status ShardkvServer::Put(::grpc::ServerContext* context,
                                   const ::PutRequest* request,
                                   Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::string requestedKey = request->key();
+    std::string requestedData = request->data();
+    std::string requestedUser = request->user();
+    if(primaryServerAddress == address && !backupServerAddress.empty()) {
+        auto serverChannel = ::grpc::CreateChannel(backupServerAddress, ::grpc::InsecureChannelCredentials());
+        auto newkvStub = Shardkv::NewStub(serverChannel);
+        ::grpc::ClientContext context;
+        auto status = newkvStub->Put(&context, *request, response);
+        if (!status.ok()) return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Operation failed");
+    }
+    int keyID = extractID(requestedKey);
+    if(keyServerMap.find(keyID) == keyServerMap.end() || keyServerMap[keyID]!=shardmanager_address) {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server not responsible for the specified key");
+    }
+    if(requestedKey.find("post", 0) == std::string::npos) {
+        keyValueDatabase["all_users"] += (requestedKey+",");
+        keyValueDatabase[requestedKey] = requestedData;
+        return ::grpc::Status::OK;
+    }
+    if (requestedUser.empty()) {
+        keyValueDatabase[requestedKey] = requestedData;
+        return ::grpc::Status::OK;
+    }
+    int userID = extractID(requestedUser);
+    std::string postUserKey = requestedUser + "_posts";
+    if (keyServerMap[userID] != shardmanager_address) {
+        std::chrono::milliseconds timespan(100);
+        auto serverChannel = grpc::CreateChannel(keyServerMap[userID], grpc::InsecureChannelCredentials());
+        auto stub = Shardkv::NewStub(serverChannel);
+        int i = 0;
+        while(i < MAX_SERVER_ATTEMPTS) {
+            ::grpc::ClientContext context;
+            AppendRequest request;
+            Empty res;
+            request.set_key(postUserKey);
+            request.set_data(requestedKey);
+            auto status = stub->Append(&context, request, &res);
+            if(status.ok()) break;
+            std::this_thread::sleep_for(timespan);
+            i++;
+        }
+        if (i == MAX_SERVER_ATTEMPTS) {
+            return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Unable to contact server");
+        }
+    } else {
+        keyValueDatabase[postUserKey] += (requestedKey + ",");
+    }
+    postUserMap[requestedKey] = requestedUser;
+    keyValueDatabase[requestedKey] = requestedData;
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -57,7 +112,26 @@
 ::grpc::Status ShardkvServer::Append(::grpc::ServerContext* context,
                                      const ::AppendRequest* request,
                                      Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    std::string requestedKey = request->key();
+    std::string requestedData = request->data();
+    int keyID = extractID(requestedKey);
+    std::string user = (requestedKey[0] == 'p') ? postUserMap[requestedKey] : (requestedKey[requestedKey.length()-1] == 's') ? "" : requestedKey;
+    if(keyServerMap.find(keyID) == keyServerMap.end() || keyServerMap[keyID] != shardmanager_address) {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server not responsible for the specified key");
+    }
+    if (requestedKey.back() == 's') {
+        keyValueDatabase[requestedKey].append(requestedData + ",");
+        return ::grpc::Status::OK;
+    }
+    bool isPostKey = requestedKey.find("post_") == 0;
+    std::string userKey = isPostKey ? postUserMap[requestedKey] + "_posts" : "all_users";
+    if (keyValueDatabase.find(requestedKey) == keyValueDatabase.end()) {
+        keyValueDatabase[requestedKey] = requestedData;
+        keyValueDatabase[userKey].append(requestedKey + ",");
+    } else {
+        keyValueDatabase[requestedKey].append(requestedData);
+    }
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -75,7 +149,14 @@
 ::grpc::Status ShardkvServer::Delete(::grpc::ServerContext* context,
                                            const ::DeleteRequest* request,
                                            Empty* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    auto requestedKey = request->key();
+	if(this->keyValueDatabase.find(requestedKey)!=this->keyValueDatabase.end())
+        this->keyValueDatabase.erase(requestedKey);
+    else {
+        return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Server not responsible for the specified key");
+    }
+    keyValueDatabase.erase(requestedKey);
+    return ::grpc::Status::OK;
 }
 
 /**
@@ -97,7 +178,62 @@
  * method!
  */
 void ShardkvServer::QueryShardmaster(Shardmaster::Stub* stub) {
-
+    Empty query;
+    QueryResponse response;
+    ::grpc::ClientContext cc;
+    std::chrono::milliseconds timespan(100);
+    auto status = stub->Query(&cc, query, &response);
+    if (!status.ok()) {
+        std::cerr << "Failed to query shardmaster: " << status.error_message() << std::endl;
+        return;
+    }
+    std::map<int, std::string> newKeyServerMap;
+    for (int i = 0; i < response.config_size(); ++i) {
+        std::string serv = response.config(i).server();
+        for (int j = 0; j < response.config(i).shards_size(); ++j) {
+            for (int k = response.config(i).shards(j).lower(); k <= response.config(i).shards(j).upper(); ++k) {
+                newKeyServerMap[k] = serv;
+            }
+        }
+    }
+    for (const auto& [k, serv] : newKeyServerMap) {
+        if (keyServerMap.find(k) != keyServerMap.end() && serv != keyServerMap[k] && keyServerMap[k] == shardmanager_address) {
+            auto serverChannel = grpc::CreateChannel(serv, grpc::InsecureChannelCredentials());
+            auto stub = Shardkv::NewStub(serverChannel);
+            std::vector<std::string> keys = {"user_" + std::to_string(k), "post_" + std::to_string(k), "user_" + std::to_string(k) + "_posts"};
+            for (const auto& key : keys) {
+                if (keyValueDatabase.find(key) != keyValueDatabase.end()) {
+                    for (int i = 0; i < MAX_SERVER_ATTEMPTS; ++i) {
+                        ::grpc::ClientContext cc;
+                        PutRequest req;
+                        Empty res;
+                        req.set_key(key);
+                        req.set_data(keyValueDatabase[key]);
+                        auto stat = stub->Put(&cc, req, &res);
+                        if (stat.ok()) {
+                            keyValueDatabase.erase(key);
+                            if (key.find("post_") != std::string::npos) postUserMap.erase(key);
+                            else if (key.find("user_") != std::string::npos && key.find("_posts") == std::string::npos) {
+                                std::string userListAsString = keyValueDatabase["all_users"];
+                                std::vector<std::string> usersVector = parse_value(userListAsString, ",");
+                                usersVector.erase(find(usersVector.begin(), usersVector.end(), key));
+                                userListAsString = "";
+                                for (auto user : usersVector) {
+                                    userListAsString += user;
+                                    userListAsString += ",";
+                                }
+                                keyValueDatabase["all_users"] = userListAsString;
+                            }
+                            break;
+                        } else {
+                            std::this_thread::sleep_for(timespan);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    keyServerMap = std::move(newKeyServerMap);
 }
 
 
@@ -115,9 +251,30 @@ void ShardkvServer::QueryShardmaster(Shardmaster::Stub* stub) {
  * method!
  * */
 void ShardkvServer::PingShardmanager(Shardkv::Stub* stub) {
-
+    PingRequest request;
+    request.set_server(address);
+    request.set_viewnumber(currentAcknowledgedViewNumber);
+    grpc::ClientContext cc;
+    PingResponse response;
+    auto status = stub->Ping(&cc, request, &response);
+    currentAcknowledgedViewNumber = response.id();
+    backupServerAddress = response.backup();
+    primaryServerAddress = response.primary();
+    if(status.ok()) {
+        if(shardmaster_address.empty()) {
+            shardmaster_address = response.shardmaster();
+            if(primaryServerAddress != address) {
+                auto channel = grpc::CreateChannel(primaryServerAddress, grpc::InsecureChannelCredentials());
+                auto stub = Shardkv::NewStub(channel);
+                grpc::ClientContext cc;
+                DumpResponse dump_response;
+                stub->Dump(&cc, Empty(), &dump_response);
+                for(auto& kv : dump_response.database()) keyValueDatabase.insert({kv.first, kv.second});
+            }
+        }
+    }
+    return;
 }
-
 
 /**
  * PART 3 ONLY
@@ -133,5 +290,9 @@ void ShardkvServer::PingShardmanager(Shardkv::Stub* stub) {
  * here>")
  */
 ::grpc::Status ShardkvServer::Dump(::grpc::ServerContext* context, const Empty* request, ::DumpResponse* response) {
-    return ::grpc::Status(::grpc::StatusCode::INVALID_ARGUMENT, "Not implemented yet");
+    auto dataset = response->mutable_database();
+    for(const auto& kv : keyValueDatabase) {
+        dataset->insert({kv.first, kv.second});
+    }
+    return ::grpc::Status::OK;
 }
