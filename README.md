@@ -72,7 +72,7 @@ You will mainly work in the `clouds-project-2023/backend-distributed-system/back
 
 + **For Linux users**, you have to install (if you don't have it already) [Docker engine](https://docs.docker.com/engine/install/ubuntu/).
 
-+ **For Windows users*, we strongly recommend to download a Linux virtual machine (see [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
++ **For Windows users**, follow the guide [here](https://gitlab.eurecom.fr/johnsonv/clouds-project-2023/-/blob/main/Docker-WSL2-Windows.md)
 
 ##### Note: Docker Desktop (or Docker engine) must be active in order to use containers
 
